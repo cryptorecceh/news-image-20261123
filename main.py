@@ -256,35 +256,36 @@ class Typer:
         return cx
 
     def wrap(self, name, s, maxw):
-        """Greedy word wrap; always returns at least one line."""
+        """Greedy word wrap; always returns at least one line.
+
+        Walks the words left to right, keeping a running line; a word
+        that alone is wider than the column is cut across lines.
+        """
         space = self.width(name, " ")
         lines = []
-        words = s.split(" ")
-        cur = []
-        cur_w = 0
-        for word in words:
+        line = ""
+        line_w = 0
+        for word in s.split(" "):
             ww = self.width(name, word)
-            extra = ww if not cur else space + ww
-            if cur_w + extra <= maxw:
-                cur.append(word)
-                cur_w += extra
+            join = ww if line == "" else space + ww
+            if line_w + join <= maxw:
+                line = word if line == "" else line + " " + word
+                line_w += join
                 continue
-            if cur:
-                lines.append(" ".join(cur))
-            cur = []
-            cur_w = 0
-            # Hard-split a single word that is wider than the column.
-            while ww > maxw and len(word) > 1:
-                n = len(word)
-                while n > 1 and self.width(name, word[:n]) > maxw:
+            if line != "":
+                lines.append(line)
+                line, line_w = "", 0
+            # Cut an over-wide single word into column-sized pieces.
+            rest = word
+            while self.width(name, rest) > maxw and len(rest) > 1:
+                n = len(rest)
+                while n > 1 and self.width(name, rest[:n]) > maxw:
                     n -= 1
-                lines.append(word[:n])
-                word = word[n:]
-                ww = self.width(name, word)
-            cur = [word]
-            cur_w = ww
-        if cur or not lines:
-            lines.append(" ".join(cur))
+                lines.append(rest[:n])
+                rest = rest[n:]
+            line, line_w = rest, self.width(name, rest)
+        if line != "" or not lines:
+            lines.append(line)
         return lines
 
 # ------------------------------------------------------------------ PNG out
@@ -382,24 +383,28 @@ def pictogram(pg, kind, ox, oy):
             pg.fill(ox + 3, oy + d, 4, 2, INK)
             pg.fill(ox + 21, oy + d, 4, 2, INK)
     elif kind == "bars":
-        pg.fill(ox + 4, oy + 18, 5, 8, NAVY)
-        pg.fill(ox + 12, oy + 12, 5, 14, RED)
-        pg.fill(ox + 20, oy + 5, 5, 21, GOLD)
+        # Three rising bars: markets, scores, tallies.
+        pg.fill(ox + 3, oy + 20, 6, 6, NAVY)
+        pg.fill(ox + 11, oy + 13, 6, 13, RED)
+        pg.fill(ox + 19, oy + 6, 6, 20, GOLD)
     elif kind == "tank":
-        pg.fill(ox + 4, oy + 12, 18, 8, NAVY)
-        pg.seg(ox + 20, oy + 15, ox + 27, oy + 15, INK)
-        pg.disc(ox + 8, oy + 22, 2, INK)
-        pg.disc(ox + 14, oy + 22, 2, INK)
-        pg.disc(ox + 20, oy + 22, 2, INK)
+        # Hull, turret, barrel, three road wheels.
+        pg.fill(ox + 3, oy + 13, 20, 7, NAVY)
+        pg.fill(ox + 9, oy + 8, 8, 5, NAVY)
+        pg.seg(ox + 17, oy + 10, ox + 26, oy + 10, INK)
+        for wx in (7, 13, 19):
+            pg.disc(ox + wx, oy + 22, 2, INK)
     elif kind == "gavel":
         pg.seg(ox + 6, oy + 24, ox + 20, oy + 10, INK)
         pg.fill(ox + 16, oy + 4, 10, 6, NAVY)
         pg.fill(ox + 4, oy + 24, 8, 2, INK)
     elif kind == "crown":
-        pg.poly([(ox + 5, oy + 22), (ox + 5, oy + 10), (ox + 10, oy + 15),
-                 (ox + 14, oy + 6), (ox + 18, oy + 15), (ox + 23, oy + 10),
-                 (ox + 23, oy + 22)], GOLD)
-        pg.fill(ox + 5, oy + 22, 18, 3, GOLD)
+        # Five-point crown with a band.
+        pg.poly([(ox + 4, oy + 22), (ox + 4, oy + 8), (ox + 9, oy + 14),
+                 (ox + 14, oy + 5), (ox + 19, oy + 14), (ox + 24, oy + 8),
+                 (ox + 24, oy + 22)], GOLD)
+        pg.fill(ox + 4, oy + 22, 20, 3, GOLD)
+        pg.disc(ox + 14, oy + 18, 2, RED)
 
 
 def art_climate(pg, ox, oy, w, h):
@@ -683,70 +688,67 @@ def project(lon, lat):
     return px, py
 
 
-def render_page(pg, tp):
-    assert len(LEADS) == 3 and len(MEDIUM) == 12
-    assert len(LIST_A) + len(LIST_B) == 39
-    total = 3 + 12 + 39
-
-    # Kicker strip.
+def _masthead(pg, tp):
+    """Kicker strip, big date line, and the double rule below it."""
     tp.draw(pg, "sansb10", 12, 2, "THE WORLD'S NEWS OF ONE DAY", RED)
     right = "54 STORIES \u00b7 9 REGIONS \u00b7 ALL FROM THIS MONDAY"
     tp.draw(pg, "sans10", 1012 - tp.width("sans10", right), 2, right, INK)
-
-    # Masthead: the date in doubled bold sans, centred.
     mast = "Monday 23 November 2026"
     tp.draw2x(pg, "sansb22", (W - 2 * tp.width("sansb22", mast)) // 2, 16,
               mast, INK)
     pg.hline(12, 1012, 72, INK, 2)
     pg.hline(12, 1012, 75, INK, 1)
 
-    # The day in UTC: a timeline with six ticks.
+
+def _timeline(pg, tp):
+    """The day in UTC: six events on a horizontal rule."""
     tp.draw(pg, "sansb10", 12, 80, "THE DAY IN UTC", RED)
     pg.hline(140, 980, 99, INK, 1)
     for slot, tick in zip(TIMELINE, TICK_X):
         pg.vline(tick, 95, 103, INK, 1)
-        tp.draw(pg, "sansb10", tick - tp.width("sansb10", slot["time"]) // 2,
-                82, slot["time"], INK)
-        tp.draw(pg, "sans10", tick - tp.width("sans10", slot["event"]) // 2,
-                102, slot["event"], INK)
+        t_w = tp.width("sansb10", slot["time"])
+        tp.draw(pg, "sansb10", tick - t_w // 2, 82, slot["time"], INK)
+        e_w = tp.width("sans10", slot["event"])
+        tp.draw(pg, "sans10", tick - e_w // 2, 102, slot["event"], INK)
 
-    # Three lead stories, each with a drawn panel.
-    arts = [art_climate, art_markets, art_gulf]
-    for i, lead in enumerate(LEADS):
-        lx = LEAD_X[i]
-        arts[i](pg, lx, 118, 324, 112)
-        pg.frame(lx, 118, 324, 112, INK)
-        tp.draw(pg, "sansb10", lx, 236, lead["kicker"], RED)
-        for j, txt in enumerate(tp.wrap("sansb22", lead["headline"], 324)[:3]):
-            tp.draw(pg, "sansb22", lx, 252 + j * 26, txt, INK)
-        for j, txt in enumerate(tp.wrap("sans12", lead["body"], 324)[:2]):
-            tp.draw(pg, "sans12", lx, 332 + j * 15, txt, INK)
-        tp.draw(pg, "sans10", lx, 364, lead["source"], GREY)
-    pg.hline(12, 1012, 382, INK, 1)
 
-    # Twelve medium stories in a 6x2 grid.
-    for k, item in enumerate(MEDIUM):
-        col, row = k % 6, k // 6
-        mx = MED_X[col]
-        ry = 388 + row * 110
-        pictogram(pg, item["icon"], mx, ry)
-        tp.draw(pg, "sansb10", mx + 34, ry + 8, item["kicker"], RED)
-        for j, txt in enumerate(tp.wrap("sansb15", item["headline"], 160)[:2]):
-            tp.draw(pg, "sansb15", mx, ry + 32 + j * 17, txt, INK)
-        for j, txt in enumerate(tp.wrap("sans10", item["detail"], 160)[:2]):
-            tp.draw(pg, "sans10", mx, ry + 68 + j * 12, txt, INK)
-        tp.draw(pg, "sans10", mx, ry + 92, item["source"], GREY)
-    pg.hline(12, 1012, 606, INK, 1)
+def _lead(pg, tp, i, lead):
+    """One lead story: drawn panel above kicker, headline, body."""
+    lx = LEAD_X[i]
+    [art_climate, art_markets, art_gulf][i](pg, lx, 118, 324, 112)
+    pg.frame(lx, 118, 324, 112, INK)
+    tp.draw(pg, "sansb10", lx, 236, lead["kicker"], RED)
+    y = 252
+    for txt in tp.wrap("sansb22", lead["headline"], 324)[:3]:
+        tp.draw(pg, "sansb22", lx, y, txt, INK)
+        y += 26
+    y = 332
+    for txt in tp.wrap("sans12", lead["body"], 324)[:2]:
+        tp.draw(pg, "sans12", lx, y, txt, INK)
+        y += 15
+    tp.draw(pg, "sans10", lx, 364, lead["source"], GREY)
 
-    # Bottom section: map on the left, two story lists on the right.
-    tp.draw(pg, "sansb10", 12, 612, "WHERE IT HAPPENED", RED)
-    tp.draw(pg, "sansb10", 354, 612, "AMERICAS \u00b7 AFRICA \u00b7 MIDDLE EAST",
-            RED)
-    tp.draw(pg, "sansb10", 676, 612, "EUROPE \u00b7 ASIA \u00b7 MARKETS", RED)
-    pg.vline(348, 612, 1000, GREY, 1)
-    pg.vline(672, 612, 1000, GREY, 1)
 
-    # World map: ocean, graticule, continents, numbered dots.
+def _medium(pg, tp, k, item):
+    """One medium story: pictogram, kicker, headline, detail, source."""
+    col, row = k % 6, k // 6
+    mx = MED_X[col]
+    ry = 388 + row * 110
+    pictogram(pg, item["icon"], mx, ry)
+    tp.draw(pg, "sansb10", mx + 34, ry + 8, item["kicker"], RED)
+    y = ry + 32
+    for txt in tp.wrap("sansb15", item["headline"], 160)[:2]:
+        tp.draw(pg, "sansb15", mx, y, txt, INK)
+        y += 17
+    y = ry + 68
+    for txt in tp.wrap("sans10", item["detail"], 160)[:2]:
+        tp.draw(pg, "sans10", mx, y, txt, INK)
+        y += 12
+    tp.draw(pg, "sans10", mx, ry + 92, item["source"], GREY)
+
+
+def _world_map(pg, tp):
+    """Ocean, graticule, continents, and the numbered story dots."""
     pg.fill(MAP_X, MAP_Y, MAP_W, MAP_H, OCEAN)
     grid = (198, 216, 222)
     for lon in range(-150, 181, 30):
@@ -771,14 +773,18 @@ def render_page(pg, tp):
     for j, txt in enumerate(MAP_LEGEND.split("\n")):
         tp.draw(pg, "sans10", 12, 798 + j * 12, txt, INK)
 
-    # Date check: what did and did not happen by today.
+
+def _datecheck(pg, tp):
+    """Box listing what did and did not happen by today."""
     pg.frame(12, 850, 330, 150, INK)
     tp.draw(pg, "sansb10", 20, 856, "DATE CHECK \u2014 LEFT OUT AS OLDER NEWS",
             RED)
     for j, item in enumerate(DATECHECK):
         tp.draw(pg, "sans10", 20, 872 + j * 12, item["text"], INK)
 
-    # The two story lists.
+
+def _story_lists(pg, tp):
+    """The two columns of short sourced stories."""
     for colx, items in ((354, LIST_A), (676, LIST_B)):
         for j, item in enumerate(items):
             y = 634 + j * 17
@@ -787,29 +793,58 @@ def render_page(pg, tp):
             after = tp.draw(pg, "sans12", colx + 13, y, item["text"], INK)
             tp.draw(pg, "sans12", after, y, " [" + item["source"] + "]", GREY)
 
-    # Footer.
+
+def render_page(pg, tp):
+    assert len(LEADS) == 3 and len(MEDIUM) == 12
+    assert len(LIST_A) + len(LIST_B) == 39
+    total = 3 + 12 + 39
+
+    _masthead(pg, tp)
+    _timeline(pg, tp)
+    for i, lead in enumerate(LEADS):
+        _lead(pg, tp, i, lead)
+    pg.hline(12, 1012, 382, INK, 1)
+    for k, item in enumerate(MEDIUM):
+        _medium(pg, tp, k, item)
+    pg.hline(12, 1012, 606, INK, 1)
+
+    tp.draw(pg, "sansb10", 12, 612, "WHERE IT HAPPENED", RED)
+    tp.draw(pg, "sansb10", 354, 612, "AMERICAS \u00b7 AFRICA \u00b7 MIDDLE EAST",
+            RED)
+    tp.draw(pg, "sansb10", 676, 612, "EUROPE \u00b7 ASIA \u00b7 MARKETS", RED)
+    pg.vline(348, 612, 1000, GREY, 1)
+    pg.vline(672, 612, 1000, GREY, 1)
+    _world_map(pg, tp)
+    _datecheck(pg, tp)
+    _story_lists(pg, tp)
+
     pg.hline(12, 1012, 1006, GREY, 1)
     tp.draw(pg, "sans10", (W - tp.width("sans10", FOOTER)) // 2, 1010,
             FOOTER, GREY)
     return total
 
 
-# ------------------------------------------------------------------ main
-def render_entry():
+def build_png():
+    """Decode the fonts, draw the page, encode the PNG, return bytes."""
     fonts = _decode_fonts()
     pg = Canvas(PAPER)
     tp = Typer(fonts)
     total = render_page(pg, tp)
-    return encode_png(pg), total
+    png = encode_png(pg)
+    return png, total
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--output", "-o", default=None)
+    """Entry point: --check validates, otherwise write entry.png."""
+    ap = argparse.ArgumentParser(
+        prog="main.py",
+        description="Render Monday 23 November 2026 world news as one PNG.")
+    ap.add_argument("--output", "-o", metavar="PATH", default=None,
+                    help="where to write entry.png (default: $MAKEFUN_OUTPUT_DIR or /output)")
     ap.add_argument("--check", action="store_true",
                     help="render and validate without writing a file")
     args = ap.parse_args(argv)
-    png, total = render_entry()
+    png, total = build_png()
     if len(png) > 1024 * 1024:
         print("FAIL: PNG is %d bytes, over the 1 MiB limit" % len(png),
               file=sys.stderr)
@@ -819,10 +854,11 @@ def main(argv=None):
               "1024x1024, PNG %d bytes (%.1f KB)"
               % (total, len(png), len(png) / 1024))
         return 0
-    out = args.output
-    if out is None:
-        outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-        out = os.path.join(outdir, "entry.png")
+    if args.output:
+        out = args.output
+    else:
+        out = os.path.join(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"),
+                           "entry.png")
     parent = os.path.dirname(os.path.abspath(out))
     if parent:
         os.makedirs(parent, exist_ok=True)
