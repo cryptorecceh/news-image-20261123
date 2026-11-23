@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Monday 23 November 2026 world news, summed up in one 1024x1024 image.
 
-Standard library only (Python 3.13): no third-party imports, no
-network, no clock, no randomness. All artwork (text, map, charts) is
-drawn procedurally from the data tables in this file, and the PNG
-encoder is written here too, on top of stdlib zlib.
+Pure Python 3.13 standard library: no third-party imports, no
+network, no clock, no randomness. The page (masthead, timeline, lead
+panels, medium stories, world map, story lists, date check) is drawn
+procedurally from the tables at the bottom of this file, and the PNG
+bytes are encoded here as well, on top of stdlib zlib.
 
 Run:  python3 main.py [--output entry.png] [--check]
 The default output is /output/entry.png (or $MAKEFUN_OUTPUT_DIR/entry.png).
@@ -19,196 +20,205 @@ import struct
 import sys
 import zlib
 
-# ---------------------------------------------------------------- fonts
-# 1-bit bitmap fonts, rasterised from Liberation fonts at build time.
-# Blob layout: glyphs in codepoint order; each glyph starts with one
-# width byte, then ceil(width/8)*height bitmap bytes (MSB-first,
-# row-major).
+# ------------------------------------------------------------------ fonts
+# 1-bit bitmap fonts, rasterised from Liberation fonts when the first
+# version of this renderer was built. Blob layout: glyphs in codepoint
+# order; each glyph starts with one width byte, then
+# ceil(width/8)*height bitmap bytes (MSB-first, row-major).
 # CHARS is ASCII 32-126 plus middle dot, em dash, right quote, euro.
 CHARS = [chr(c) for c in range(32, 127)] + ["\u00b7", "\u2014", "\u2019", "\u20ac"]
-# The masthead serif only renders "Sunday 22 November 2026", so its
-# blob holds just those characters, in codepoint order.
-SERIF_CHARS = " 0126NSabdemnortuvy"
 
 F_SANS10 = "AwAAAAAAAAAAAAAAAAADAAAAQEBAQEAAQAAAAAQAAACgIAAAAAAAAAAABgAAAAgI/ED4EBAAAAAGAAAAeIBgMAgIeAAAAAkAAAAAAABiAIQAgABrABQAFAAjAAAAAAAAAAcAAAA4CDBklIh0AAAAAgAAAAAAAAAAAAAAAAAEAAAAIEBAQEBAQEAgAAQAAACAQAAgICAAQIAABAAAAADgYCAAAAAAAAAGAAAAAAAAeAAAAAAAAAMAAAAAAAAAAABAQAAABAAAAAAAAABgAAAAAAADAAAAAAAAAAAAQAAAAAMAAAAgAEBAQICAAAAABgAAAHBIiIiISHAAAAAGAAAAIGAgICAgeAAAAAYAAABwSAgQIEB4AAAABgAAAHAICDAICHAAAAAGAAAAEDAwUBD4EAAAAAYAAAB4QHAICAhwAAAABgAAADBAcEhISDAAAAAGAAAAeAgQICAgIAAAAAYAAABwSEhwSEhwAAAABgAAAHBICEh4CHAAAAADAAAAAABAAAAAQAAAAAMAAAAAAEAAAABAQAAABgAAAAAIMMAwCAAAAAAGAAAAAAB4AHgAAAAAAAYAAAAAQDAIMEAAAAAABgAAAHBICBAgACAAAAALAAAAAAAAHwAggE4AUgASgFsAQAAeAAAAAAAHAAAAECAoSHxEggAAAAcAAAB4RER4RER4AAAACAAAADxCQEBAQjwAAAAIAAAAeERCQkJEeAAAAAcAAAB8QEB8QEB8AAAABwAAAHxAQHhAQEAAAAAIAAAAPEJADkJCPAAAAAgAAABERER8REREAAAAAwAAAEBAQEBAQEAAAAAFAAAAMBAQEBCQcAAAAAcAAABESFBwUEhEAAAABgAAAEBAQEBAQHgAAAAJAAAAAAAAQwBjAGUARQBRAFkASQAAAAAAAAAIAAAAYmJSUkpGQgAAAAgAAAA8QkKCQkI8AAAABwAAAHhERER4QEAAAAAIAAAAPEJCgkJCPAgMAAgAAAB8RER4SEREAAAABwAAADhEQDgERHgAAAAHAAAA/BAQEBAQEAAAAAgAAABEREREREQ4AAAABwAAAIREREgoMBAAAAAKAAAAAAAAiICMgESAVQBRADMAIwAAAAAAAAAHAAAARAgwEChIRAAAAAcAAABESCgwEBAQAAAABwAAAHwIECAgQPwAAAADAAAAQEBAQEBAQEBAAAMAAACAgABAQAAgAAAAAwAAAMBAQEBAQEBAwAAFAAAAIFAQgAAAAAAAAAYAAAAAAAAAAAAAAPgABAAAQAAAAAAAAAAAAAAGAAAAAABwCHiIaAAAAAYAAABAQHBISEhwAAAABQAAAAAAcECAQHAAAAAGAAAACAh4SIhIeAAAAAYAAAAAAHBI+EBwAAAAAwAAAGBA4EBAQEAAAAAGAAAAAAB4CIgIaAhwAAYAAABAQHBISEhIAAAAAwAAAAAAQEBAQEAAAAADAAAAAABAQEBAQECAAAUAAABAQFBgYFBIAAAAAwAAAEBAQEBAQEAAAAAJAAAAAAAAAAAAAHYASQBJAEkASQAAAAAAAAAGAAAAAABwSEhISAAAAAYAAAAAAHBIiEhwAAAABgAAAAAAcEhISHBAQAAGAAAAAAB4SIhIeAgIAAQAAAAAAGBAQEBAAAAABQAAAAAAcEAwCHAAAAADAAAAAEDAQEBAQAAAAAYAAAAAAEhISEhoAAAABQAAAAAAiFBQUCAAAAAIAAAAAACSmmhsZAAAAAUAAAAAAFBQIFCIAAAABQAAAAAAiFBQMCAgQAAFAAAAAABwECBA8AAAAAQAAAAgQEBAwEBAQCAAAwAAAEBAQEBAQEBAQAAEAAAAwEBAQCBAQEDAAAYAAAAAAGAYAAAAAAAABAAAAAAAAEAAAAAAAAAKAAAAAAAAAAAAAAAAAAD/wAAAAAAAAAAAAAADAAAAQAAAAAAAAAAAAAYAAAA4QPBA8EA4AAAA"
 F_SANS12 = "BAAAAAAAAAAAAAAAAAAABAAAQEBAQEBAQABAAAAABQAAUFAQAAAAAAAAAAAABwAAJCT+AAhI/EhAAAAABwAQeFRQUDgUFNR4EAAACwAAAABhABEAkgAUAGXACUAIQBFAIcAAAAAAAAAIAAAYJCQ4MlKMTHsAAAADAABAQEAAAAAAAAAAAAAEAAAQIEBAQEBAQEAgEAAEAACAQCAgICAgICBAgAAFAAAg8GBQAAAAAAAAAAAIAAAAABAQfBAQAAAAAAAEAAAAAAAAAAAAAEAAQAAEAAAAAAAAAGAAAAAAAAAEAAAAAAAAAAAAAEAAAAAEAAAgICBAQEBAgIAAAAAHAAA4RERExERETDgAAAAHAAAwUBAQEBAQEHwAAAAHAAA4RAQECBAgQHwAAAAHAAA4RAQMOAQERDgAAAAHAAAIGCgoSEj8CAgAAAAHAAB8QEB4BAQERHgAAAAHAAA4REB4RERERDgAAAAHAAB8BAgIEBAwICAAAAAHAAA4RERMOERERDgAAAAHAAA4TERETDQESDgAAAAEAAAAAEAAAAAAAEAAAAAEAAAAAEAAAAAAAEAAQAAIAAAAAAQ4QDgEAAAAAAAIAAAAAAB8AAB8AAAAAAAIAAAAAEA4BDhAAAAAAAAHAAA4RAQECBAQABAAAAANAAAAAA+AEEAmoEmgUKBRIFEgTMBAACAAHwAAAAgAABgYJCQkfkJCgQAAAAgAAHxGQkZ8QkJCfAAAAAkAAAAAHgBhAEAAQABAAEAAQABhAB4AAAAAAAAACQAAAAB8AEIAQQBBAEEAQQBBAEIAfAAAAAAAAAAIAAB+QEBAfkBAQH4AAAAIAAB+QEBAfkBAQEAAAAAKAAAAAB4AYQBAAEAARwBBAEEAIQAeAAAAAAAAAAkAAAAAQQBBAEEAQQB/AEEAQQBBAEEAAAAAAAAABAAAQEBAQEBAQEBAAAAABgAAOAgICAgICMhwAAAACAAAQkRIUHBIREZCAAAABwAAQEBAQEBAQEB8AAAACgAAAABhgGGAYYBSgFKAUoBMgEyATIAAAAAAAAAJAAAAAGEAYQBRAFEASQBJAEUARwBDAAAAAAAAAAoAAAAAHgBjAEEAQYBAgEGAQQBjAB4AAAAAAAAACAAAfEJCQkJ8QEBAAAAACgAAAAAeAGMAQQBBgECAQYBBAGMAHgAEAAcAAAAJAAAAAH4AQwBBAEIAfABEAEIAQgBBAAAAAAAAAAgAADxCQDAOAgJCPAAAAAgAAP4QEBAQEBAQEAAAAAkAAAAAQQBBAEEAQQBBAEEAQwBiADwAAAAAAAAACAAAgUJCQiQkPBgYAAAADAAAAACEIMYgQmBKQEpAKUAhwDGAMYAAAAAAAAAIAABCJiQYGBgkQkIAAAAIAABCQiQYGBgYGBgAAAAIAAB+BAwIECAgQP4AAAAEAABgQEBAQEBAQEBAYAAEAACAgEBAQEAgICAAAAAEAADAQEBAQEBAQEBAwAAGAAAwUEiIAAAAAAAAAAAHAAAAAAAAAAAAAAAAAP4EAEAgAAAAAAAAAAAAAAAHAAAAADhMBHxETHQAAAAHAABAQHhERERERHgAAAAGAAAAADhIQEBATDgAAAAHAAAEBDRMRERETHQAAAAHAAAAADhERHxARDgAAAAEAABgQOBAQEBAQEAAAAAHAAAAADRMRERETHQEeAAHAABAQFhEREREREQAAAADAABAAEBAQEBAQEAAAAADAABAAEBAQEBAQEBAgAAGAABAQEhYUHBQSEwAAAADAABAQEBAQEBAQEAAAAAKAAAAAAAAAAB7gEyATIBMgEyATIBMgAAAAAAAAAcAAAAAWERERERERAAAAAcAAAAAOEREREREOAAAAAcAAAAAeEREREREeEBAAAcAAAAANExERERMdAQEAAQAAAAAcEBAQEBAQAAAAAYAAAAAeEBAOAgIeAAAAAQAAEBA4EBAQEBAYAAAAAcAAAAARERERERMdAAAAAYAAAAAhEhISDAwMAAAAAkAAAAAAAAAAIiAmQBRAFUAVQBmACIAAAAAAAAABgAAAABISDAwMEjMAAAABgAAAACESEhIMDAwIEAABgAAAAB4CBAwIED4AAAABQAAMGBAQEDAQEBAYDAABAAAQEBAQEBAQEBAQEBABQAAwEAgICAwICAgQMAACAAAAAAAYAwAAAAAAAAABAAAAAAAAABgAAAAAAAADAAAAAAAAAAAAAAAAAAA//AAAAAAAAAAAAAAAAADAABAQEAAAAAAAAAAAAAHAAA8JEDwQPBAJDwAAAA="
 F_SANSB10 = "AwAAAAAAAAAAAAAAAAAEAAAAQEBAQEAAQAAAAAUAAABQUFAAAAAAAAAABgAAACgIeFD4UBAAAAAGAAAAeMBgeAgIeAAAAAkAAAAAAABiAJQAlABrABSAFIAjAAAAAAAAAAgAAAA4KDh0XEx+AAAAAwAAAEBAQAAAAAAAAAAEAAAAIEBAQEBAQEAgAAQAAADAQGBgYGBgQMAABAAAAEDwYCAAAAAAAAAGAAAAACAg+DAgAAAAAAMAAAAAAAAAAABAQEAABAAAAAAAAADgAAAAAAADAAAAAAAAAAAAQAAAAAMAAABgQEBAQMCAAAAABgAAAHBYyMjIWHAAAAAGAAAAcHAwMDAweAAAAAYAAABwWBgQIED4AAAABgAAAHBYGDAYyHAAAAAGAAAAGDg4WNj8GAAAAAYAAAB4QHBYCNhwAAAABgAAADBYwPjISHAAAAAGAAAA+BgQMCAgIAAAAAYAAABwSFhwyMhwAAAABgAAAHDYyHgIWHAAAAAEAAAAAABAAAAAQAAAAAQAAAAAAEAAAABAAEAABgAAAAAIcMBwCAAAAAAGAAAAAAD4APgAAAAAAAYAAAAAwDgIOMAAAAAABwAAAHhICBgwADAAAAAKAAAAAAAAHgAhgE6AUoACgAaAWwBAAD4AAAAIAAAAGDgoLHxExgAAAAgAAAB8RER8RkZ8AAAACAAAADxmQMBAZjwAAAAIAAAAeExGRkZMeAAAAAcAAAB8QEB8QEB8AAAABwAAAHxAQHxAQEAAAAAIAAAAPGZAzkJmPAAAAAgAAABGRkZ+RkZGAAAAAwAAAEBAQEBAQEAAAAAGAAAAOBgYGBjYcAAAAAgAAABESFBwSExGAAAABwAAAEBAQEBAQHwAAAAJAAAAAAAAYwBnAGcAVwBbAFsASwAAAAAAAAAIAAAAZmZ2Vl5ORgAAAAgAAAA8ZkLCQmY8AAAABwAAAHhMREx4QEAAAAAIAAAAPGZCwkJmPAgOAAgAAAB8RkZ8TERGAAAABwAAAHhMYDwERHgAAAAHAAAA/DAwMDAwMAAAAAgAAABGRkZGRmQ4AAAABwAAAMRETGgoODAAAAAKAAAAAAAAzIDMgF2AVYB3AHMAMwAAAAAAAAAHAAAARGg4MDhsxAAAAAcAAADEbCgwEBAQAAAABwAAAHwIEDBgQPwAAAAEAAAAYEBAQEBAQEBgAAMAAACAwEBAQEBgAAAABAAAAOBgYGBgYGBg4AAGAAAAMHBIyAAAAAAAAAYAAAAAAAAAAAAAAPgABAAAQCAAAAAAAAAAAAAGAAAAAABwGHjYbAAAAAcAAABAQHhMTEx4AAAABgAAAAAAcEjASHAAAAAHAAAACAh4SMhIeAAAAAYAAAAAAHBI+EB4AAAABAAAAGBA4EBAQEAAAAAHAAAAAAB4SMhIeAh4AAcAAABAQHhISEhIAAAAAwAAAEAAQEBAQEAAAAADAAAAQABAQEBAQEDAAAYAAABAQFhQcFhIAAAAAwAAAEBAQEBAQEAAAAAJAAAAAAAAAAAAAFsASQBJAEkASQAAAAAAAAAHAAAAAABYSEhISAAAAAcAAAAAAHhMzEh4AAAABwAAAAAAeExMTHhAQAAHAAAAAAB4SMhIeAgIAAQAAAAAAHBAQEBAAAAABgAAAAAAcEB4CHgAAAAEAAAAAEDgQEBAYAAAAAcAAAAAAEhISEh4AAAABgAAAAAAyEhYcDAAAAAIAAAAAACb2mpmZgAAAAYAAAAAAEhwMHDIAAAABgAAAAAAyEhYMDAgYAAFAAAAAABwMCBA+AAAAAQAAAAwYGBgwGBgYDAAAwAAAEBAQEBAQEBAQAAEAAAAwGBgYDBgYGDAAAYAAAAAAGAYAAAAAAAABAAAAAAAAEAAAAAAAAAKAAAAAAAAAAAAAAAAAAD/wAAAAAAAAAAAAAADAAAAQEBAAAAAAAAAAAYAAAA4QOBA4EA4AAAA"
 F_SANSB15 = "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"
 F_SANSB22 = "BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAA4ODg4ODg4ODg4AAA4ODgAAAAAAAsAAAAAAAAAAAAAc4AzgDOAM4AzgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAAAADGAMYAhACEB/8H/wGMAQgDGA/+B/4DGAIQBjAGMAAAAAAAAAAAAAAA0AAAAAAAAAAAIAH4A/4HLgcmByAH4AP4AfwAfgAnBicHJwfvA/4B+AAgACAAAAAAAAABQAAAAAAAAAAAAAAAAAAAA8BwB+BgBjDABjHABjGABjMABjd4B+b8A8zOAB3GABnGADHGAHDOAGD8AMB4AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAPAD+AMcAxwDOAPwA+AHwg7HHOYcfhw8Hj4P/4fjgAAAAAAAAAAAAAGAAAAAABwcHBwcAAAAAAAAAAAAAAAAAAAAAgAAAAADhwcODg4OHBwcHBwcHA4ODg4HBwOCAAAAADgcHA4OBwcHBwcHBwcHBwcODhwcOAJAAAAAAAAAAAAABgAGABbAP8APAA+AHcAIgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAAAAAHAAcABwAHAH/wf/AHAAcABwAHAAcAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAAAAA4ODgYMDAAAAgAAAAAAAAAAAAAAAAAfHx8AAAAAAAAAAAABwAAAAAAAAAAAAAAAAAAAAAAeHh4AAAAAAAHAAAAABwcGBg4ODgwMHBwcGBgYOAAAAAAAA0AAAAAAAAAAAAADwA/wDnAcOBw4HDgcOBw4HDgcOBw4HDgOcAfwA8AAAAAAAAAAAAAAA0AAAAAAAAAAAAABwAfAD8AdwAHAAcABwAHAAcABwAHAAcABwB/8H/wAAAAAAAAAAAAAA0AAAAAAAAAAAAAH4A/wHngcOAA4ADgAcADwAeAHgA8ADgAeAB/4H/gAAAAAAAAAAAAAA0AAAAAAAAAAAAAH4A/wHngcOAA4AHgD4APgAPgAOAA4HDgf+A/wB+AAAAAAAAAAAAAAA0AAAAAAAAAAAAAA8ADwAfAD8ANwB3AGcAxwHHAYcD/8P/wAcABwAHAAAAAAAAAAAAAAA0AAAAAAAAAAAAAP+A/4HgAcABwAHeAf8B/4ADgAPAA8HDgeeA/wB+AAAAAAAAAAAAAAA0AAAAAAAAAAAAAD4AfwD3gcOBwAHeAf8B54HDgcOBw4HDgPeAfwA+AAAAAAAAAAAAAAA0AAAAAAAAAAAAAf+B/4ADgAOABwAOAA4AHAAcADgAOAA4AHgAcABwAAAAAAAAAAAAAAA0AAAAAAAAAAAAAH4A/wHngcOBw4DjgH8AfwHjgcOBw8HDgeOA/wB+AAAAAAAAAAAAAAA0AAAAAAAAAAAAAHwA/wHnAcOBw4HDgcOB54D/gHuAA4HDge8A/wB8AAAAAAAAAAAAAAAgAAAAAAAAAADg4OAAAAAAAADg4OAAAAAAACAAAAAAAAAAAODg4AAAAAAAAODg4GBgwAAANAAAAAAAAAAAAAAAAAAAAEADwB/AfgH4AcABwAH4AH4AD8ADwABAAAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAAAAAAAAAAf/B/8AAAAAAAAH/wf/AAAAAAAAAAAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAAAABAAHgAfgAPwAPwAHAAcAPwD8B+AHgAQAAAAAAAAAAAAAAAAAAOAAAAAAAAAAAAAA/AH+A98HhwcHAAcAHgA8AHAAcAAAAAAAcABwAHAAAAAAAAAAAAAAAWAAAAAAAAAAAAAAAAAAAAAP4AA/+ABgDADABgGHswMP8wMYYwIwYQYwYwYgYwYgwwYwxgI/fAMeOAGAAAHAEAB/8AAfwAAAAAAAAAEAAAAAAAAAAAAAADwAPAB+AH4A5gDnAOcBw4HDgf+D/8OBx4HHAOcA4AAAAAAAAAAAAAEAAAAAAAAAAAAAB/8H/4eHx4HHgceDx/+H/4eDx4HngOeB54PH/8f/AAAAAAAAAAAAAAEAAAAAAAAAAAAAAH4B/4P/w8HngMcABwAHAAcABwAHgMPB4//A/4B+AAAAAAAAAAAAAAEAAAAAAAAAAAAAB/wH/wefh4PHgeeA54DngOeA54HngceDx4+H/wf8AAAAAAAAAAAAAADwAAAAAAAAAAAAB/+H/4eAB4AHgAeAB/+H/4eAB4AHgAeAB4AH/8f/wAAAAAAAAAAAAADgAAAAAAAAAAAAB/+H/4eAB4AHgAeAB/8H/weAB4AHgAeAB4AHgAeAAAAAAAAAAAAAAAEgAAAAAAAAAAAAAAAAAAAAfwAB/8AD/+ADweAHgMAHAAAHAAAHB/AHB/AHAHAHgHADwPAD//AB/8AAfwAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAeBx4HHgceBx4HHgcf/x//H/8eBx4HHgceBx4HHgcAAAAAAAAAAAAAAcAAAAAAHh4eHh4eHh4eHh4eHh4eAAAAAAADQAAAAAAAAAAAAAH4AfgAeAA4ADgAOAA4ADgAOAA4HDgceB/wD/AHwAAAAAAAAAAAAAAEAAAAAAAAAAAAAB4Hng8eHh48Hnge8B/gH/AfcB44HjweHh4PHgceA4AAAAAAAAAAAAADgAAAAAAAAAAAAB4AHgAeAB4AHgAeAB4AHgAeAB4AHgAeAB4AH/4f/gAAAAAAAAAAAAAEwAAAAAAAAAAAAAAAAAAAHwPgHwPgH4PgH4PgH4fgHYbgHcbgHM7gHMzgHOzgHHzgHHjgHHjgHDjgHDDgAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAeAx8DH4Mfgx3DHcMc4xzjHHMcOxw7HB8cHxwPHA8AAAAAAAAAAAAABIAAAAAAAAAAAAAAAAAAAAH8AAP/AA//gA8HgB4DwBwBwBwBwBwBwBwBwBwBwB4DwA8HgAf/AAP+AAH4AAAAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAH/gf/h4+Hg8eBx4HHg8ePh/8H/geAB4AHgAeAB4AAAAAAAAAAAAAAASAAAAAAAAAAAAAAAAAAAAB/AAD/gAP/4APB4AeA8AcAcAcAcAcAcAcAcAcAcAeA8APA4APj4AH/wAB/AAAOAAAPAAAH4AAD4AAAAAEAAAAAAAAAAAAAB/8H/8eHx4HngeeBx4fH/4f/B4cHh4eDh4PHgeeA4AAAAAAAAAAAAADwAAAAAAAAAAAAAP4D/wPHh4OHgAPAA/wA/wAfgAPHAccDx8eD/4D+AAAAAAAAAAAAAADgAAAAAAAAAAAAD/+P/4B4AHAAcABwAHAAcABwAHAAcABwAHAAcABwAAAAAAAAAAAAAAEAAAAAAAAAAAAABwHnAecB5wHnAecB5wHnAecB54HngcODw//B/4B+AAAAAAAAAAAAAADwAAAAAAAAAAAADwHHAccDx4ODg4OHAccBxwHOAO4A7gD8AHwAfAA4AAAAAAAAAAAAAAFQAAAAAAAAAAAAAAAAAAAOBwePD4cHD4cHD4cHDYcHHc4Dnc4Dmc4DmM4DuNwB+PwB+PwB8PgA8HgA8HgAAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAAAAcDw4ODxwHPAO4A/AB8AHwAfADuAc8BxwODhwPHAcAAAAAAAAAAAAAA8AAAAAAAAAAAAAcBx4ODh4PHAc8A7gD8AHwAeAA4ADgAOAA4ADgAOAAAAAAAAAAAAAAA4AAAAAAAAAAAAAf/B/8ADwAOAB4APAA4AHAA4AHgA8ADgAeAB/+H/4AAAAAAAAAAAAAAgAAAAAfn5wcHBwcHBwcHBwcHBwcHBwcH5+BwAAAADgYGBgcHBwMDA4ODgYGBwcAAAAAAAIAAAAAPz8HBwcHBwcHBwcHBwcHBwcHBz8/A0AAAAAAAAAAAAADwAPgA2AHcAYwDjAMOAwYHBwYDAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/wAAAAAAgAAAAAcDgMAAAAAAAAAAAAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAAAPgD/AOcAw4ADgH+B/4HDgceBz4H7wPHAAAAAAAAAAAAAADgAAAAAAAAAAOAA4ADgAOAA7wD/gPPA4cDhwOHg4eDhwOHA88D/gc8AAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAAAPgD/AOOBw4HAAcABwAHAAcOA44D/AD4AAAAAAAAAAAAAADgAAAAAAAAAAAHAAcABwAHAecD/wOPBw8HBwcHBwcHBwcPA48D/wHnAAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAAAPgD/AOOBw4HDgf+B/4HAAcAA44D/AD4AAAAAAAAAAAAAACAAAAAAePjg4/v44ODg4ODg4ODg4AAAAAAAOAAAAAAAAAAAAAAAAAAAAAB5wP/A48HDwcHBwcHBwcHBw8DjwP/AecABwAHA44D/gD4AOAAAAAAAAAAA4ADgAOAA4ADvAP+A88DhwOHA4cDhwOHA4cDhwOHA4cAAAAAAAAAAAAAAHAAAAADg4AAA4ODg4ODg4ODg4ODgAAAAAAAcAAAAAODgAADg4ODg4ODg4ODg4ODg4cPDgDQAAAAAAAAAAOAA4ADgAOAA48DngOcA7gD8APwA/gDvAOcA44DjgOHAAAAAAAAAAAAAABwAAAAA4ODg4ODg4ODg4ODg4ODg4AAAAAAAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAc8eAN++APfvAOPHAOPHAOOHAOOHAOOHAOOHAOOHAOOHAOOHAAAAAAAAAAAAAAAAAAAAADgAAAAAAAAAAAAAAAAAAAABzwDfgPPA4cDhwOHA4cDhwOHA4cDhwOHAAAAAAAAAAAAAADgAAAAAAAAAAAAAAAAAAAAAPgB/gOPB4cHBwcHhweHBweHA48B/gD4AAAAAAAAAAAAAADgAAAAAAAAAAAAAAAAAAAABzwD/gPPA4cDhwOHg4eDhwOHA88D/gO8A4ADgAOAA4ADgADgAAAAAAAAAAAAAAAAAAAAAecD/wOPBw8HBwcHBwcHBwcPA48D/wHnAAcABwAHAAcABwCQAAAAAAAAAAAAAAAAAAAABzADcAPwA4ADgAOAA4ADgAOAA4ADgAOAAAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAAAfgD/AcOBwwHwAP4AP4AHgcOBw4D/gH4AAAAAAAAAAAAAACAAAAAAAGDg4/v44ODg4ODg4OD4eAAAAAAAOAAAAAAAAAAAAAAAAAAAAAHBwcHBwcHBwcHBwcHBwcHB48D3wP3AecAAAAAAAAAAAAAANAAAAAAAAAAAAAAAAAAAAAOBwcHBw4HDgOOA5wDnAHYAfgB+ADwAPAAAAAAAAAAAAAAASAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4cOA4eOAY+OAY2MAc2cAc3cANzcANjYAPj4APj4AHhwAHBwAAAAAAAAAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAABw4HjgOcAfgB+ADwAPAB+AHcA5wHDg8PAAAAAAAAAAAAAADQAAAAAAAAAAAAAAAAAAAADwcHBwcOAw4DjAOcAZwB2AH4APgA8ABwAHAA4AHgB8AHgACwAAAAAAAAAAAAAAAAAAAAB/wH/AA4AHgAcADgAeABwAOAB4AH/Af8AAAAAAAAAAAAAACQAAAAAAAAAADwAfABwAHAAcABwAHAAcADgA8ADwADgAHAAcABwAHAAcABwAHAAfAA8ABwAAAAAwMDAwMDAwMDAwMDAwMDAwMDAwMDAJAAAAAAAAAADwAPgAPAAcABwAHAAcABwAHgAPAA8AHgAcABwAHAAcABwAHAA8APgA8AANAAAAAAAAAAAAAAAAAAAAAAAAAAA8AH8wR/AB4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAA4ODgAAAAAAAAAAAAAABYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///z///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAA4ODgQEDAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAAAAD4Af4DzgOHA4AP8AfgB4AP8AfwA4ADhwPOAf4AeAAAAAAAAAAAAAAA=="
-F_SERIFB48 = "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAfgAB/4AD78AHw+APw/APg/Afgfgfgfgfgfg/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfwfgfgfgfgfgfgPg/APw/AHw+AD78AB/4AAfgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAD8AAP8AAf8AB/8AD/8ACH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH8AAH+AD//8D//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP+AB//wB+f4BwH8BwD+BwD+BgD+BgB+AAB+AAD+AAD+AAD+AAD8AAH8AAH4AAPwAAPgAAfAAA+AAB8AAD4AAHwAAPAAAeAAA8AAB4AAD///D///D///D///D///AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AA//gB+fgD8HgH4DgPwDgPwDgfgBgfgAA/gAA/gAA/gAA/v4A//+A///A/g/g/gfw/gfw/gfw/gPw/gP4/gP4/gPwfgPwfgPwPwfwPwfgH4fgD9/AB/+AAfwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf/AB/8B/+AH/wAf8ABwAB/wAHAAH/gAcAAf/ABwAB/+AHAAHf8AcAAc/wBwABz/gHAAHH/AcAAcP+BwABwf4HAAHA/wcAAcD/hwABwH/HAAHAP+cAAcAf5wABwB/3AAHAD/8AAcAH/wABwAP/AAHAAf8AAcAB/wABwAD/AAHAAH8AAcAAPwABwAAfAAHAAB8AH/wADwAf/AAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB/4AAB//4AB/n+AA+APgAPAB4AHwAOAB8ADgAfAA4AH4AAAB/AAAAf8AAAH/4AAA//gAAP//AAB//4AAH//AAAf/4AAB//AAAD/wAAAH8AAAA/gBgAH4AYAB+AGAAfABgAHwAcAB8AHAAeAB8APgAf4fwAH//wAAH/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/4AP/+APj/AOA/gMA/gMA/gAA/gAA/gAA/gB//gP//gfw/g/g/g/g/g/A/g/A/g/A/g/g/g/g/gf//gf/f4H4f4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH/AAAB/wAAAH8AAAB/AAAAfwAAAH8AAAB/AAAAfwAAAH8AAAB/AAAAfwAAAH4/gAB//+AAf//wAH8D+AB/AfwAfwH8AH8A/AB/AP4AfwD+AH8A/gB/AP4AfwD+AH8A/gB/APwAfwD8AH8B/AB/AfgAfwH4AH8D8AB/7+AAf//AAAH/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf8AAAH/AAAAfwAAAH8AAAB/AAAAfwAAAH8AAAB/AAAAfwAAAH8AAAB/AAD/fwAD//8AB/n/AA/gfwAfwH8AH8B/AB+AfwA/gH8AP4B/AD+AfwA/gH8AP4B/AD+AfwA/gH8AP4B/AD+AfwAfwH8AH8B/AA/gfwAH//8AA///wAD+P8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/gAD/4AP78APh+Afh+Afg/A/g/A/g/A/g/A///A///A/gAA/gAA/gAA/gAA/gAAfgAAfwAAP4AAH//AD/+AA/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf8HwD8A/z/x/4B///v/wH/H/j/gfwP4H+B/AfwP4H8B/A/gfwH8D+B/AfwP4H8B/A/gfwH8D+B/AfwP4H8B/A/gfwH8D+B/AfwP4H8B/A/gfwH8D+B/AfwP4H8B/A/gfwH8D+D/x/8/+f/H/z/4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPwf4AH/n+AD//+AB/x/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4Af8H+AH/D/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/wAD/8AH5+APw/Afgfgfgfg/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfw/gfwfgfgfgfgPw/AH5+AD/8AA/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf+BwP+HwD+PwD+fwD+/wD/4wD/AwD+AQD+AAD+AAD+AAD+AAD+AAD+AAD+AAD+AAD+AAD+AAD+AAD+AAP/wAf/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcADwAPAB8APwD/+f/4f4A/AD8APwA/AD8APwA/AD8APwA/AD8APwA/AD8AP4A/gD/8H/wH8AAAAAAAAAAAAAAAAAAAAAAAAAAAAABsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB/w/4Af8H+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAfwP4AH8D+AB/A/gAf8f4AD//+AAf+f4AD8H+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/+B//+B/P4AcP4AcH8A4H8A4D+AwD+BwB/BwB/DgB/jgA/nAA/3AAf2AAf+AAP8AAP8AAH8AAH4AAD4AADwAABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/w/3/gfj+AHB/AOB/AOB/gOA/gcA/gcAfw4Afw4AP4wAP5wAP9wAH9gAH/gAD/AAD/AAB/AAB+AAB+AAA8AAA8AAAcAAA4AAA4AABwAGBwAGDgAGHgAH/AAH+AAH4AAAAAAA=="
 
-# Decoded-size expectations (integrity check on every font blob).
-_FONT_SPECS = [
-    {"name": "sans10", "chars": CHARS, "height": 13, "blob": F_SANS10, "size": 1464},
-    {"name": "sans12", "chars": CHARS, "height": 14, "blob": F_SANS12, "size": 1709},
-    {"name": "sansb10", "chars": CHARS, "height": 13, "blob": F_SANSB10, "size": 1464},
-    {"name": "sansb15", "chars": CHARS, "height": 18, "blob": F_SANSB15, "size": 3123},
-    {"name": "sansb22", "chars": CHARS, "height": 25, "blob": F_SANSB22, "size": 4699},
-    {"name": "serif48", "chars": SERIF_CHARS, "height": 54, "blob": F_SERIFB48, "size": 3475},
+# Each entry: (name, characters, pixel height, blob, decoded byte size).
+_FONT_TABLE = [
+    ("sans10", CHARS, 13, F_SANS10, 1464),
+    ("sans12", CHARS, 14, F_SANS12, 1709),
+    ("sansb10", CHARS, 13, F_SANSB10, 1464),
+    ("sansb15", CHARS, 18, F_SANSB15, 3123),
+    ("sansb22", CHARS, 25, F_SANSB22, 4699),
 ]
 
 
 def _decode_fonts():
-    """Decode the bitmap blobs into {name: (height, {char: (w, bytes)})}."""
-    decoded = {}
-    for spec in _FONT_SPECS:
-        name = spec["name"]
-        raw = base64.b64decode(spec["blob"])
-        if len(raw) != spec["size"]:
+    """Turn the blobs above into {name: (height, {char: (width, bits)})}."""
+    fonts = {}
+    for name, chars, height, blob, want in _FONT_TABLE:
+        raw = base64.b64decode(blob)
+        if len(raw) != want:
             raise ValueError("font %s decoded to %d bytes, expected %d"
-                             % (name, len(raw), spec["size"]))
+                             % (name, len(raw), want))
         glyphs = {}
-        off = 0
-        for ch in spec["chars"]:
-            w = raw[off]
-            off += 1
-            stride = (w + 7) // 8
-            glyphs[ch] = (w, raw[off:off + stride * spec["height"]])
-            off += stride * spec["height"]
-        if off != len(raw):
+        pos = 0
+        for ch in chars:
+            w = raw[pos]
+            pos += 1
+            step = (w + 7) // 8
+            glyphs[ch] = (w, raw[pos:pos + step * height])
+            pos += step * height
+        if pos != len(raw):
             raise ValueError("font %s parse ended at %d of %d"
-                             % (name, off, len(raw)))
-        decoded[name] = (spec["height"], glyphs)
-    return decoded
+                             % (name, pos, len(raw)))
+        fonts[name] = (height, glyphs)
+    return fonts
+
+# ------------------------------------------------------------------ canvas
+W = H = 1024
+
+PAPER = (247, 243, 235)
+INK = (24, 24, 24)
+RED = (166, 38, 38)
+NAVY = (15, 28, 46)
+GOLD = (212, 164, 65)
+GREY = (96, 90, 74)
+OCEAN = (214, 228, 232)
+LAND = (232, 220, 190)
+DUSK = (38, 52, 74)
+CREAM = (239, 231, 214)
+BURST = (205, 72, 25)
+WHITE = (255, 255, 255)
+SKYLINE = (13, 22, 38)
 
 
-# ---------------------------------------------------------------- colours
-W, H = 1024, 1024
-_PALETTE = {
-    "paper": (247, 243, 235),
-    "ink": (24, 24, 24),
-    "red": (166, 38, 38),
-    "navy": (15, 28, 46),
-    "gold": (212, 164, 65),
-    "grey": (96, 90, 74),
-    "ocean": (214, 228, 232),
-    "land": (232, 220, 190),
-    "dusk": (38, 52, 74),
-    "cream": (239, 231, 214),
-    "burst": (205, 72, 25),
-    "white": (255, 255, 255),
-    "skyline": (13, 22, 38),
-}
-(PAPER, INK, RED, NAVY, GOLD, GREY, OCEAN, LAND, DUSK, CREAM, BURST,
- WHITE, SKYLINE) = (_PALETTE[k] for k in
-                    ("paper", "ink", "red", "navy", "gold", "grey",
-                     "ocean", "land", "dusk", "cream", "burst", "white",
-                     "skyline"))
+class Canvas:
+    """A plain RGB bytearray picture with small drawing helpers.
 
+    The buffer is one flat bytearray, three bytes per pixel, row-major.
+    Every helper clips to the 1024x1024 frame, so callers never have
+    to check bounds themselves.
+    """
 
-class Surface:
-    """Plain RGB bytearray canvas with tiny drawing primitives."""
+    def __init__(self, bg):
+        self.px = bytearray(bytes(bg) * (W * H))
 
-    def __init__(self, w, h, bg):
-        self.w = w
-        self.h = h
-        self.px = bytearray(bytes(bg) * (w * h))
-
-    def set(self, x, y, c):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            o = (y * self.w + x) * 3
+    def put(self, x, y, c):
+        if 0 <= x < W and 0 <= y < H:
+            o = (y * W + x) * 3
             self.px[o:o + 3] = bytes(c)
 
-    def rect(self, x, y, w, h, c):
-        ax = max(0, x)
-        ay = max(0, y)
-        bx = min(self.w, x + w)
-        by = min(self.h, y + h)
-        if bx <= ax or by <= ay:
+    def fill(self, x, y, w, h, c):
+        """Solid rectangle, clipped."""
+        x0 = x if x > 0 else 0
+        y0 = y if y > 0 else 0
+        x1 = x + w if x + w < W else W
+        y1 = y + h if y + h < H else H
+        if x1 <= x0 or y1 <= y0:
             return
-        row = bytes(c) * (bx - ax)
-        for yy in range(ay, by):
-            o = (yy * self.w + ax) * 3
+        row = bytes(c) * (x1 - x0)
+        for yy in range(y0, y1):
+            o = (yy * W + x0) * 3
             self.px[o:o + len(row)] = row
 
-    def hline(self, x0, x1, y, c, thick=1):
-        for t in range(thick):
-            self.rect(x0, y + t, x1 - x0, 1, c)
+    def hline(self, x0, x1, y, c, t=1):
+        for k in range(t):
+            self.fill(x0, y + k, x1 - x0, 1, c)
 
-    def vline(self, x, y0, y1, c, thick=1):
-        for t in range(thick):
-            self.rect(x + t, y0, 1, y1 - y0, c)
+    def vline(self, x, y0, y1, c, t=1):
+        for k in range(t):
+            self.fill(x + k, y0, 1, y1 - y0, c)
 
-    def line(self, ax, ay, bx, by, c):
-        dx = abs(bx - ax)
-        dy = -abs(by - ay)
-        sx = 1 if ax < bx else -1
-        sy = 1 if ay < by else -1
-        err = dx + dy
-        while True:
-            self.set(ax, ay, c)
-            if ax == bx and ay == by:
-                return
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                ax += sx
-            if e2 <= dx:
-                err += dx
-                ay += sy
+    def frame(self, x, y, w, h, c):
+        self.fill(x, y, w, 1, c)
+        self.fill(x, y + h - 1, w, 1, c)
+        self.fill(x, y, 1, h, c)
+        self.fill(x + w - 1, y, 1, h, c)
 
-    def circle(self, cx, cy, r, c):
-        r2 = r * r
+    def seg(self, ax, ay, bx, by, c):
+        """Bresenham line from (ax, ay) to (bx, by)."""
+        dx = bx - ax
+        dy = by - ay
+        steps = max(abs(dx), abs(dy))
+        if steps == 0:
+            self.put(ax, ay, c)
+            return
+        for i in range(steps + 1):
+            t = i / steps
+            self.put(round(ax + dx * t), round(ay + dy * t), c)
+
+    def disc(self, cx, cy, r, c):
+        """Filled circle."""
         for yy in range(cy - r, cy + r + 1):
             dy = yy - cy
-            for xx in range(cx - r, cx + r + 1):
-                dx = xx - cx
-                if dx * dx + dy * dy <= r2:
-                    self.set(xx, yy, c)
+            half = int(math.sqrt(max(0, r * r - dy * dy)))
+            self.fill(cx - half, yy, half * 2 + 1, 1, c)
 
     def ring(self, cx, cy, r, c):
-        steps = max(24, 6 * r)
-        for i in range(steps):
-            a = 2 * math.pi * i / steps
-            self.set(int(cx + r * math.cos(a)), int(cy + r * math.sin(a)), c)
+        """Circle outline, drawn parametrically."""
+        n = max(24, 6 * r)
+        for i in range(n):
+            a = 2 * math.pi * i / n
+            self.put(int(cx + r * math.cos(a)), int(cy + r * math.sin(a)), c)
 
     def poly(self, pts, c):
-        """Scanline fill of a simple polygon (list of (x, y))."""
+        """Scanline fill of a simple polygon given as [(x, y), ...]."""
         if len(pts) < 3:
             return
-        ys = [p[1] for p in pts]
-        top = max(0, int(min(ys)))
-        bot = min(self.h - 1, int(max(ys)))
+        top = max(0, int(min(p[1] for p in pts)))
+        bot = min(H - 1, int(max(p[1] for p in pts)))
         n = len(pts)
         for y in range(top, bot + 1):
-            xs = []
+            cuts = []
             for i in range(n):
                 x0, y0 = pts[i]
                 x1, y1 = pts[(i + 1) % n]
                 if (y0 <= y < y1) or (y1 <= y < y0):
-                    t = (y - y0) / (y1 - y0)
-                    xs.append(x0 + t * (x1 - x0))
-            xs.sort()
-            for k in range(0, len(xs) - 1, 2):
-                xa = max(0, int(xs[k]))
-                xb = min(self.w - 1, int(xs[k + 1]))
+                    cuts.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+            cuts.sort()
+            for k in range(0, len(cuts) - 1, 2):
+                xa = int(cuts[k])
+                xb = int(cuts[k + 1])
                 if xb >= xa:
-                    self.rect(xa, y, xb - xa + 1, 1, c)
+                    self.fill(max(0, xa), y, min(W - 1, xb) - max(0, xa) + 1, 1, c)
+
+    def curve(self, p0, p1, p2, c):
+        """Quadratic Bezier through control point p1, 24 segments."""
+        prev = p0
+        for i in range(1, 25):
+            t = i / 24
+            u = 1 - t
+            x = u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0]
+            y = u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]
+            cur = (int(x), int(y))
+            self.seg(prev[0], prev[1], cur[0], cur[1], c)
+            prev = cur
+
+    def starburst(self, cx, cy, r, c):
+        """Eight-ray burst with a solid centre."""
+        for i in range(8):
+            a = math.pi * i / 4
+            self.seg(cx, cy, int(cx + r * math.cos(a)),
+                     int(cy + r * math.sin(a)), c)
+        self.disc(cx, cy, max(2, r // 4), c)
 
 
+# ------------------------------------------------------------------ typing
 class Typer:
-    """Bitmap text using the decoded fonts."""
+    """Bitmap text from the decoded fonts."""
 
     def __init__(self, fonts):
         self.fonts = fonts
 
     def width(self, name, s):
         _, glyphs = self.fonts[name]
-        blank = glyphs[" "][0]
+        space = glyphs[" "][0]
         total = 0
         for ch in s:
             g = glyphs.get(ch)
-            total += g[0] if g else blank
+            total += g[0] if g is not None else space
         return total
 
     def draw(self, pg, name, x, y, s, color):
         height, glyphs = self.fonts[name]
-        blank = glyphs[" "][0]
+        space = glyphs[" "][0]
         cx = x
         for ch in s:
             g = glyphs.get(ch)
             if g is None:
-                cx += blank
+                cx += space
                 continue
             w, bits = g
             rb = (w + 7) // 8
@@ -216,24 +226,24 @@ class Typer:
                 row = bits[yy * rb:(yy + 1) * rb]
                 for xx in range(w):
                     if row[xx // 8] & (0x80 >> (xx % 8)):
-                        pg.set(cx + xx, y + yy, color)
+                        pg.put(cx + xx, y + yy, color)
             cx += w
         return cx
 
     def draw2x(self, pg, name, x, y, s, color):
-        """Draw text at 2x scale (each bitmap pixel becomes a 2x2 block).
+        """Draw at double size: each bitmap pixel becomes a 2x2 block.
 
-        Used for the masthead: the serif masthead font only holds the
-        characters of the previous day's date, so the masthead is set in
-        the bold sans at double size instead.
+        The masthead is set this way: the serif masthead font only
+        holds the characters of the previous day's date, so the big
+        date line is the bold sans, doubled.
         """
         height, glyphs = self.fonts[name]
-        blank = glyphs[" "][0]
+        space = glyphs[" "][0]
         cx = x
         for ch in s:
             g = glyphs.get(ch)
             if g is None:
-                cx += blank * 2
+                cx += space * 2
                 continue
             w, bits = g
             rb = (w + 7) // 8
@@ -241,43 +251,44 @@ class Typer:
                 row = bits[yy * rb:(yy + 1) * rb]
                 for xx in range(w):
                     if row[xx // 8] & (0x80 >> (xx % 8)):
-                        pg.rect(cx + xx * 2, y + yy * 2, 2, 2, color)
+                        pg.fill(cx + xx * 2, y + yy * 2, 2, 2, color)
             cx += w * 2
         return cx
 
     def wrap(self, name, s, maxw):
-        """Greedy word wrap; returns a list of lines (never empty)."""
+        """Greedy word wrap; always returns at least one line."""
         space = self.width(name, " ")
         lines = []
-        cur_words = []
+        words = s.split(" ")
+        cur = []
         cur_w = 0
-        for word in s.split(" "):
+        for word in words:
             ww = self.width(name, word)
-            add = ww if not cur_words else space + ww
-            if cur_w + add <= maxw:
-                cur_words.append(word)
-                cur_w += add
+            extra = ww if not cur else space + ww
+            if cur_w + extra <= maxw:
+                cur.append(word)
+                cur_w += extra
                 continue
-            if cur_words:
-                lines.append(" ".join(cur_words))
-                cur_words = []
-                cur_w = 0
+            if cur:
+                lines.append(" ".join(cur))
+            cur = []
+            cur_w = 0
+            # Hard-split a single word that is wider than the column.
             while ww > maxw and len(word) > 1:
-                # hard-split an over-long word
                 n = len(word)
                 while n > 1 and self.width(name, word[:n]) > maxw:
                     n -= 1
                 lines.append(word[:n])
                 word = word[n:]
                 ww = self.width(name, word)
-            cur_words = [word]
+            cur = [word]
             cur_w = ww
-        if cur_words or not lines:
-            lines.append(" ".join(cur_words))
+        if cur or not lines:
+            lines.append(" ".join(cur))
         return lines
 
-# ---------------------------------------------------------------- PNG out
-def _paeth_pick(a, b, c):
+# ------------------------------------------------------------------ PNG out
+def _paeth(a, b, c):
     p = a + b - c
     pa = abs(p - a)
     pb = abs(p - b)
@@ -289,76 +300,157 @@ def _paeth_pick(a, b, c):
     return c
 
 
-def _filter_scanline(kind, row, prev):
-    n = len(row)
-    out = bytearray(n)
-    if kind == 0:
-        out[:] = row
-    elif kind == 1:
-        out[:3] = row[:3]
-        for i in range(3, n):
-            out[i] = (row[i] - row[i - 3]) & 0xFF
-    elif kind == 2:
-        if prev is None:
-            out[:] = row
-        else:
-            for i in range(n):
-                out[i] = (row[i] - prev[i]) & 0xFF
-    elif kind == 3:
-        for i in range(n):
-            left = row[i - 3] if i >= 3 else 0
-            up = prev[i] if prev is not None else 0
-            out[i] = (row[i] - ((left + up) // 2)) & 0xFF
-    else:
-        for i in range(n):
-            a = row[i - 3] if i >= 3 else 0
-            b = prev[i] if prev is not None else 0
-            cc = prev[i - 3] if (prev is not None and i >= 3) else 0
-            out[i] = (row[i] - _paeth_pick(a, b, cc)) & 0xFF
-    return bytes(out)
-
-
-def _png_chunk(tag, data):
+def _chunk(tag, data):
     blob = struct.pack(">I", len(data)) + tag + data
     return blob + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
 
-def encode_png_bytes(pg):
-    """Encode the surface as PNG bytes; per-row greedy filter choice."""
-    w, h = pg.w, pg.h
+def encode_png(pg):
+    """Encode a Canvas as PNG bytes; every row uses the Paeth filter.
+
+    One fixed filter keeps the encoder short and the output fully
+    deterministic; the picture is flat-coloured, so Paeth compresses
+    nearly as well as a per-row search here.
+    """
     raw = bytes(pg.px)
-    stride = w * 3
+    stride = W * 3
     comp = zlib.compressobj(9)
     stream = bytearray()
     prev = None
-    for y in range(h):
+    for y in range(H):
         row = raw[y * stride:(y + 1) * stride]
-        best = None
-        best_score = None
-        best_kind = 0
-        for kind in range(5):
-            trial = _filter_scanline(kind, row, prev)
-            score = 0
-            for byte in trial:
-                score += byte if byte < 128 else 256 - byte
-            if best_score is None or score < best_score:
-                best = trial
-                best_score = score
-                best_kind = kind
-        stream.append(best_kind)
-        stream += best
+        filt = bytearray(len(row))
+        for i in range(len(row)):
+            a = row[i - 3] if i >= 3 else 0
+            b = prev[i] if prev is not None else 0
+            cc = prev[i - 3] if (prev is not None and i >= 3) else 0
+            filt[i] = (row[i] - _paeth(a, b, cc)) & 0xFF
+        stream.append(4)
+        stream += filt
         prev = row
     body = comp.compress(bytes(stream)) + comp.flush()
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
+            + _chunk(b"IDAT", bytes(body)) + _chunk(b"IEND", b""))
 
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", ihdr)
-            + _png_chunk(b"IDAT", bytes(body)) + _png_chunk(b"IEND", b""))
+
+# ------------------------------------------------------------------ pictures
+def pictogram(pg, kind, ox, oy):
+    """A small geometric pictogram inside a 28x28 box at (ox, oy)."""
+    if kind == "flame":
+        pg.poly([(14 + ox, 2 + oy), (22 + ox, 14 + oy), (18 + ox, 26 + oy),
+                 (10 + ox, 26 + oy), (6 + ox, 14 + oy)], BURST)
+        pg.poly([(14 + ox, 12 + oy), (18 + ox, 20 + oy), (14 + ox, 25 + oy),
+                 (10 + ox, 20 + oy)], GOLD)
+    elif kind == "missile":
+        pg.seg(ox + 4, oy + 24, ox + 22, oy + 6, INK)
+        pg.poly([(ox + 22, oy + 6), (ox + 26, oy + 10), (ox + 18, oy + 12)], RED)
+        pg.seg(ox + 8, oy + 20, ox + 4, oy + 26, INK)
+        pg.seg(ox + 12, oy + 22, ox + 6, oy + 22, INK)
+    elif kind == "burst":
+        pg.starburst(ox + 14, oy + 14, 12, BURST)
+        pg.disc(ox + 14, oy + 14, 3, GOLD)
+    elif kind == "globe":
+        pg.ring(ox + 14, oy + 14, 11, NAVY)
+        pg.seg(ox + 3, oy + 14, ox + 25, oy + 14, NAVY)
+        pg.seg(ox + 14, oy + 3, ox + 14, oy + 25, NAVY)
+        pg.fill(ox + 8, oy + 8, 12, 1, NAVY)
+        pg.fill(ox + 8, oy + 19, 12, 1, NAVY)
+    elif kind == "flags":
+        pg.seg(ox + 7, oy + 4, ox + 7, oy + 26, INK)
+        pg.seg(ox + 19, oy + 4, ox + 19, oy + 26, INK)
+        pg.poly([(ox + 7, oy + 4), (ox + 17, oy + 7), (ox + 7, oy + 11)], RED)
+        pg.poly([(ox + 19, oy + 4), (ox + 27, oy + 7), (ox + 19, oy + 11)], NAVY)
+    elif kind == "summit":
+        pg.disc(ox + 7, oy + 20, 3, NAVY)
+        pg.disc(ox + 14, oy + 8, 3, RED)
+        pg.disc(ox + 21, oy + 20, 3, NAVY)
+        pg.seg(ox + 7, oy + 20, ox + 14, oy + 8, INK)
+        pg.seg(ox + 14, oy + 8, ox + 21, oy + 20, INK)
+        pg.seg(ox + 7, oy + 20, ox + 21, oy + 20, INK)
+    elif kind == "pin":
+        pg.disc(ox + 14, oy + 10, 8, RED)
+        pg.poly([(ox + 8, oy + 14), (ox + 20, oy + 14), (ox + 14, oy + 26)], RED)
+        pg.disc(ox + 14, oy + 10, 3, WHITE)
+    elif kind == "chip":
+        pg.fill(ox + 7, oy + 7, 14, 14, NAVY)
+        pg.fill(ox + 11, oy + 11, 6, 6, GOLD)
+        for d in (9, 14, 19):
+            pg.fill(ox + d, oy + 3, 2, 4, INK)
+            pg.fill(ox + d, oy + 21, 2, 4, INK)
+        for d in (9, 14, 19):
+            pg.fill(ox + 3, oy + d, 4, 2, INK)
+            pg.fill(ox + 21, oy + d, 4, 2, INK)
+    elif kind == "bars":
+        pg.fill(ox + 4, oy + 18, 5, 8, NAVY)
+        pg.fill(ox + 12, oy + 12, 5, 14, RED)
+        pg.fill(ox + 20, oy + 5, 5, 21, GOLD)
+    elif kind == "tank":
+        pg.fill(ox + 4, oy + 12, 18, 8, NAVY)
+        pg.seg(ox + 20, oy + 15, ox + 27, oy + 15, INK)
+        pg.disc(ox + 8, oy + 22, 2, INK)
+        pg.disc(ox + 14, oy + 22, 2, INK)
+        pg.disc(ox + 20, oy + 22, 2, INK)
+    elif kind == "gavel":
+        pg.seg(ox + 6, oy + 24, ox + 20, oy + 10, INK)
+        pg.fill(ox + 16, oy + 4, 10, 6, NAVY)
+        pg.fill(ox + 4, oy + 24, 8, 2, INK)
+    elif kind == "crown":
+        pg.poly([(ox + 5, oy + 22), (ox + 5, oy + 10), (ox + 10, oy + 15),
+                 (ox + 14, oy + 6), (ox + 18, oy + 15), (ox + 23, oy + 10),
+                 (ox + 23, oy + 22)], GOLD)
+        pg.fill(ox + 5, oy + 22, 18, 3, GOLD)
 
 
-# ---------------------------------------------------------------- data
-# Stories are stored as dicts with named fields. Kicker = section label
-# shown in red; body/detail = one or two short sentences condensed to
-# fit the layout; source = attribution.
+def art_climate(pg, ox, oy, w, h):
+    """COP31 panel: a skyline under a rising-then-flat gold curve."""
+    pg.fill(ox, oy, w, h, DUSK)
+    bars = [34, 52, 44, 66, 58, 74, 48, 62, 40, 56, 70, 46]
+    bw = w // len(bars)
+    for i, bh in enumerate(bars):
+        pg.fill(ox + i * bw, oy + h - bh, bw - 2, bh, SKYLINE)
+    pg.curve((ox + 20, oy + h - 30), (ox + 162, oy + h - 78),
+             (ox + 304, oy + h - 30), GOLD)
+    for vx in range(50, 300, 42):
+        pg.seg(ox + vx, oy + h - 30, ox + vx, oy + h - 52, GOLD)
+    pg.starburst(ox + 90, oy + 42, 13, BURST)
+    pg.starburst(ox + 225, oy + 58, 11, GOLD)
+    pg.disc(ox + 78, oy + 30, 4, GREY)
+    pg.disc(ox + 238, oy + 46, 4, GREY)
+
+
+def art_markets(pg, ox, oy, w, h):
+    """Markets panel: a falling gold line over deepening red bars."""
+    pg.fill(ox, oy, w, h, NAVY)
+    for i in range(12):
+        bx = ox + 12 + i * 25
+        top = oy + 22 + i * 6
+        pg.fill(bx, top, 14, oy + h - top - 6, (150, 45, 45))
+    pg.seg(ox + 12, oy + 18, ox + 306, oy + 92, GOLD)
+    pg.seg(ox + 12, oy + 21, ox + 306, oy + 95, GOLD)
+    for i in range(7):
+        pg.disc(ox + 18 + i * 46, oy + 20 + i * 12, 3, WHITE)
+    pg.starburst(ox + 292, oy + 88, 10, BURST)
+    pg.starburst(ox + 40, oy + 30, 8, GOLD)
+
+
+def art_gulf(pg, ox, oy, w, h):
+    """Gulf panel: a stylised coastline with two strike bursts."""
+    pg.fill(ox, oy, w, h, NAVY)
+    pg.poly([(ox + 30, oy + 30), (ox + 120, oy + 14), (ox + 210, oy + 28),
+             (ox + 290, oy + 20), (ox + 305, oy + 55), (ox + 260, oy + 88),
+             (ox + 170, oy + 98), (ox + 80, oy + 92), (ox + 25, oy + 62)], LAND)
+    pg.curve((ox + 300, oy + 30), (ox + 210, oy + 5), (ox + 120, oy + 55), RED)
+    pg.curve((ox + 310, oy + 70), (ox + 235, oy + 40), (ox + 150, oy + 75), RED)
+    pg.disc(ox + 120, oy + 55, 3, WHITE)
+    pg.disc(ox + 150, oy + 75, 3, WHITE)
+    pg.starburst(ox + 120, oy + 55, 12, BURST)
+    pg.starburst(ox + 150, oy + 75, 10, GOLD)
+
+# ------------------------------------------------------------------ data
+# Stories are dicts with named fields. Kicker = section label shown
+# in red; body/detail = one or two short sentences condensed to fit
+# the layout; source = attribution.
 LEADS = [
     {"kicker": "CLIMATE \u00b7 COP31",
      "headline": "COP31 collapses, no deal",
@@ -577,170 +669,9 @@ CONTINENTS = [NORTH_AMERICA, GREENLAND, ICELAND, SOUTH_AMERICA, AFRICA,
     EURASIA, UK, JAPAN, SUMATRA, BORNEO, JAVA, NEW_GUINEA, AUSTRALIA,
     NEW_ZEALAND, MADAGASCAR]
 
-# ---------------------------------------------------------------- drawing
-def draw_frame(pg, x, y, w, h, c):
-    pg.rect(x, y, w, 1, c)
-    pg.rect(x, y + h - 1, w, 1, c)
-    pg.rect(x, y, 1, h, c)
-    pg.rect(x + w - 1, y, 1, h, c)
-
-
-def burst(pg, cx, cy, r, c):
-    for i in range(8):
-        a = math.pi * i / 4
-        pg.line(cx, cy, int(cx + r * math.cos(a)), int(cy + r * math.sin(a)), c)
-    pg.circle(cx, cy, max(2, r // 4), c)
-
-
-def quad_curve(pg, p0, p1, p2, c, steps=24):
-    prev = p0
-    for i in range(1, steps + 1):
-        t = i / steps
-        x = (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * p1[0] + t * t * p2[0]
-        y = (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * p1[1] + t * t * p2[1]
-        cur = (int(x), int(y))
-        pg.line(prev[0], prev[1], cur[0], cur[1], c)
-        prev = cur
-
-
-def pictogram(pg, kind, ox, oy):
-    """Small geometric pictogram in a 28x28 box at (ox, oy)."""
-    if kind == "flame":
-        pg.poly([(14 + ox, 2 + oy), (22 + ox, 14 + oy), (18 + ox, 26 + oy),
-                 (10 + ox, 26 + oy), (6 + ox, 14 + oy)], BURST)
-        pg.poly([(14 + ox, 12 + oy), (18 + ox, 20 + oy), (14 + ox, 25 + oy),
-                 (10 + ox, 20 + oy)], GOLD)
-    elif kind == "missile":
-        pg.line(ox + 4, oy + 24, ox + 22, oy + 6, INK)
-        pg.poly([(ox + 22, oy + 6), (ox + 26, oy + 10), (ox + 18, oy + 12)], RED)
-        pg.line(ox + 8, oy + 20, ox + 4, oy + 26, INK)
-        pg.line(ox + 12, oy + 22, ox + 6, oy + 22, INK)
-    elif kind == "burst":
-        burst(pg, ox + 14, oy + 14, 12, BURST)
-        pg.circle(ox + 14, oy + 14, 3, GOLD)
-    elif kind == "globe":
-        pg.ring(ox + 14, oy + 14, 11, NAVY)
-        pg.line(ox + 3, oy + 14, ox + 25, oy + 14, NAVY)
-        pg.line(ox + 14, oy + 3, ox + 14, oy + 25, NAVY)
-        pg.rect(ox + 8, oy + 8, 12, 1, NAVY)
-        pg.rect(ox + 8, oy + 19, 12, 1, NAVY)
-    elif kind == "flags":
-        pg.line(ox + 7, oy + 4, ox + 7, oy + 26, INK)
-        pg.line(ox + 19, oy + 4, ox + 19, oy + 26, INK)
-        pg.poly([(ox + 7, oy + 4), (ox + 17, oy + 7), (ox + 7, oy + 11)], RED)
-        pg.poly([(ox + 19, oy + 4), (ox + 27, oy + 7), (ox + 19, oy + 11)], NAVY)
-    elif kind == "summit":
-        pg.circle(ox + 7, oy + 20, 3, NAVY)
-        pg.circle(ox + 14, oy + 8, 3, RED)
-        pg.circle(ox + 21, oy + 20, 3, NAVY)
-        pg.line(ox + 7, oy + 20, ox + 14, oy + 8, INK)
-        pg.line(ox + 14, oy + 8, ox + 21, oy + 20, INK)
-        pg.line(ox + 7, oy + 20, ox + 21, oy + 20, INK)
-    elif kind == "pin":
-        pg.circle(ox + 14, oy + 10, 8, RED)
-        pg.poly([(ox + 8, oy + 14), (ox + 20, oy + 14), (ox + 14, oy + 26)], RED)
-        pg.circle(ox + 14, oy + 10, 3, WHITE)
-    elif kind == "chip":
-        pg.rect(ox + 7, oy + 7, 14, 14, NAVY)
-        pg.rect(ox + 11, oy + 11, 6, 6, GOLD)
-        for dx in (9, 14, 19):
-            pg.rect(ox + dx, oy + 3, 2, 4, INK)
-            pg.rect(ox + dx, oy + 21, 2, 4, INK)
-        for dy in (9, 14, 19):
-            pg.rect(ox + 3, oy + dy, 4, 2, INK)
-            pg.rect(ox + 21, oy + dy, 4, 2, INK)
-    elif kind == "bars":
-        pg.rect(ox + 4, oy + 18, 5, 8, NAVY)
-        pg.rect(ox + 12, oy + 12, 5, 14, RED)
-        pg.rect(ox + 20, oy + 5, 5, 21, GOLD)
-    elif kind == "tank":
-        pg.rect(ox + 4, oy + 12, 18, 8, NAVY)
-        pg.line(ox + 20, oy + 15, ox + 27, oy + 15, INK)
-        pg.circle(ox + 8, oy + 22, 2, INK)
-        pg.circle(ox + 14, oy + 22, 2, INK)
-        pg.circle(ox + 20, oy + 22, 2, INK)
-    elif kind == "gavel":
-        pg.line(ox + 6, oy + 24, ox + 20, oy + 10, INK)
-        pg.rect(ox + 16, oy + 4, 10, 6, NAVY)
-        pg.rect(ox + 4, oy + 24, 8, 2, INK)
-    elif kind == "crown":
-        pg.poly([(ox + 5, oy + 22), (ox + 5, oy + 10), (ox + 10, oy + 15),
-                 (ox + 14, oy + 6), (ox + 18, oy + 15), (ox + 23, oy + 10),
-                 (ox + 23, oy + 22)], GOLD)
-        pg.rect(ox + 5, oy + 22, 18, 3, GOLD)
-
-
-def art_gulf(pg, ox, oy, w, h):
-    pg.rect(ox, oy, w, h, NAVY)
-    pg.poly([(ox + 30, oy + 30), (ox + 120, oy + 14), (ox + 210, oy + 28),
-             (ox + 290, oy + 20), (ox + 305, oy + 55), (ox + 260, oy + 88),
-             (ox + 170, oy + 98), (ox + 80, oy + 92), (ox + 25, oy + 62)], LAND)
-    quad_curve(pg, (ox + 300, oy + 30), (ox + 210, oy + 5), (ox + 120, oy + 55), RED)
-    quad_curve(pg, (ox + 310, oy + 70), (ox + 235, oy + 40), (ox + 150, oy + 75), RED)
-    pg.circle(ox + 120, oy + 55, 3, WHITE)
-    pg.circle(ox + 150, oy + 75, 3, WHITE)
-    burst(pg, ox + 120, oy + 55, 12, BURST)
-    burst(pg, ox + 150, oy + 75, 10, GOLD)
-
-
-def art_climate(pg, ox, oy, w, h):
-    pg.rect(ox, oy, w, h, DUSK)
-    bars = [34, 52, 44, 66, 58, 74, 48, 62, 40, 56, 70, 46]
-    bw = w // len(bars)
-    for i, bh in enumerate(bars):
-        pg.rect(ox + i * bw, oy + h - bh, bw - 2, bh, SKYLINE)
-    quad_curve(pg, (ox + 20, oy + h - 30), (ox + 162, oy + h - 78),
-               (ox + 304, oy + h - 30), GOLD)
-    for vx in range(50, 300, 42):
-        pg.line(ox + vx, oy + h - 30, ox + vx, oy + h - 52, GOLD)
-    burst(pg, ox + 90, oy + 42, 13, BURST)
-    burst(pg, ox + 225, oy + 58, 11, GOLD)
-    pg.circle(ox + 78, oy + 30, 4, GREY)
-    pg.circle(ox + 238, oy + 46, 4, GREY)
-
-
-def art_cartel(pg, tp, ox, oy, w, h):
-    pg.rect(ox, oy, w, h, CREAM)
-    for gx in range(ox + 40, ox + w, 40):
-        pg.vline(gx, oy, oy + h, (224, 214, 190))
-    for gy in range(oy + 28, oy + h, 28):
-        pg.hline(ox, ox + w, gy, (224, 214, 190))
-    # Guasave at night: road, burning barricades, buildings
-    pg.rect(ox, oy + 78, w, 34, (52, 52, 52))
-    pg.rect(ox, oy + 92, w, 2, GOLD)
-    for bx in (18, 78, 138, 198, 258):
-        pg.rect(ox + bx, oy + 34, 44, 44, NAVY)
-        pg.rect(ox + bx + 8, oy + 46, 10, 10, GOLD)
-        pg.rect(ox + bx + 26, oy + 46, 10, 10, GOLD)
-    for fx in (60, 160, 260):
-        burst(pg, ox + fx, oy + 88, 11, BURST)
-    tp.draw(pg, "sansb10", ox + 8, oy + 6, "GUASAVE, SINALOA", RED)
-    pg.circle(ox + 252, oy + 88, 13, GOLD)
-    pg.circle(ox + 288, oy + 70, 13, GOLD)
-    for cx, cy, ch in ((ox + 252, oy + 88, "$"), (ox + 288, oy + 70, "5")):
-        ww = tp.width("sansb15", ch)
-        tp.draw(pg, "sansb15", cx - ww // 2, cy - 8, ch, INK)
-
-
-def art_markets(pg, ox, oy, w, h):
-    """Asian markets plunge: a falling gold line over red bars."""
-    pg.rect(ox, oy, w, h, NAVY)
-    for i in range(12):
-        bx = ox + 12 + i * 25
-        top = oy + 22 + i * 6
-        pg.rect(bx, top, 14, oy + h - top - 6, (150, 45, 45))
-    pg.line(ox + 12, oy + 18, ox + 306, oy + 92, GOLD)
-    pg.line(ox + 12, oy + 21, ox + 306, oy + 95, GOLD)
-    for i in range(7):
-        px = ox + 18 + i * 46
-        py = oy + 20 + i * 12
-        pg.circle(px, py, 3, WHITE)
-    burst(pg, ox + 292, oy + 88, 10, BURST)
-    burst(pg, ox + 40, oy + 30, 8, GOLD)
-
-
-LEAD_COLS = [12, 350, 688]
-MED_COLS = [12, 180, 348, 516, 684, 852]
+# ------------------------------------------------------------------ layout
+LEAD_X = [12, 350, 688]
+MED_X = [12, 180, 348, 516, 684, 852]
 TICK_X = [170, 323, 476, 629, 782, 935]
 MAP_X, MAP_Y, MAP_W, MAP_H = 12, 628, 330, 166
 LAT_TOP, LAT_BOT = 84, -58
@@ -757,48 +688,46 @@ def render_page(pg, tp):
     assert len(LIST_A) + len(LIST_B) == 39
     total = 3 + 12 + 39
 
-    # ---- kicker line
+    # Kicker strip.
     tp.draw(pg, "sansb10", 12, 2, "THE WORLD'S NEWS OF ONE DAY", RED)
-    kick_r = "54 STORIES \u00b7 9 REGIONS \u00b7 ALL FROM THIS MONDAY"
-    tp.draw(pg, "sans10", 1012 - tp.width("sans10", kick_r), 2, kick_r, INK)
+    right = "54 STORIES \u00b7 9 REGIONS \u00b7 ALL FROM THIS MONDAY"
+    tp.draw(pg, "sans10", 1012 - tp.width("sans10", right), 2, right, INK)
 
-    # ---- masthead (bold sans at 2x: the serif blob only holds the
-    # characters of the previous day's date)
+    # Masthead: the date in doubled bold sans, centred.
     mast = "Monday 23 November 2026"
     tp.draw2x(pg, "sansb22", (W - 2 * tp.width("sansb22", mast)) // 2, 16,
               mast, INK)
     pg.hline(12, 1012, 72, INK, 2)
     pg.hline(12, 1012, 75, INK, 1)
 
-    # ---- timeline
+    # The day in UTC: a timeline with six ticks.
     tp.draw(pg, "sansb10", 12, 80, "THE DAY IN UTC", RED)
     pg.hline(140, 980, 99, INK, 1)
     for slot, tick in zip(TIMELINE, TICK_X):
         pg.vline(tick, 95, 103, INK, 1)
-        tp.draw(pg, "sansb10", tick - tp.width("sansb10", slot["time"]) // 2, 82,
-                slot["time"], INK)
-        tp.draw(pg, "sans10", tick - tp.width("sans10", slot["event"]) // 2, 102,
-                slot["event"], INK)
+        tp.draw(pg, "sansb10", tick - tp.width("sansb10", slot["time"]) // 2,
+                82, slot["time"], INK)
+        tp.draw(pg, "sans10", tick - tp.width("sans10", slot["event"]) // 2,
+                102, slot["event"], INK)
 
-    # ---- leads
-    art_fns = [art_climate, art_markets, art_gulf]
+    # Three lead stories, each with a drawn panel.
+    arts = [art_climate, art_markets, art_gulf]
     for i, lead in enumerate(LEADS):
-        lx = LEAD_COLS[i]
-        art_fns[i](pg, lx, 118, 324, 112)
-        draw_frame(pg, lx, 118, 324, 112, INK)
+        lx = LEAD_X[i]
+        arts[i](pg, lx, 118, 324, 112)
+        pg.frame(lx, 118, 324, 112, INK)
         tp.draw(pg, "sansb10", lx, 236, lead["kicker"], RED)
-        wrapped = tp.wrap("sansb22", lead["headline"], 324)[:3]
-        for j, txt in enumerate(wrapped):
+        for j, txt in enumerate(tp.wrap("sansb22", lead["headline"], 324)[:3]):
             tp.draw(pg, "sansb22", lx, 252 + j * 26, txt, INK)
         for j, txt in enumerate(tp.wrap("sans12", lead["body"], 324)[:2]):
             tp.draw(pg, "sans12", lx, 332 + j * 15, txt, INK)
         tp.draw(pg, "sans10", lx, 364, lead["source"], GREY)
     pg.hline(12, 1012, 382, INK, 1)
 
-    # ---- medium stories: 6 columns, 2 rows
+    # Twelve medium stories in a 6x2 grid.
     for k, item in enumerate(MEDIUM):
         col, row = k % 6, k // 6
-        mx = MED_COLS[col]
+        mx = MED_X[col]
         ry = 388 + row * 110
         pictogram(pg, item["icon"], mx, ry)
         tp.draw(pg, "sansb10", mx + 34, ry + 8, item["kicker"], RED)
@@ -809,7 +738,7 @@ def render_page(pg, tp):
         tp.draw(pg, "sans10", mx, ry + 92, item["source"], GREY)
     pg.hline(12, 1012, 606, INK, 1)
 
-    # ---- bottom section headers
+    # Bottom section: map on the left, two story lists on the right.
     tp.draw(pg, "sansb10", 12, 612, "WHERE IT HAPPENED", RED)
     tp.draw(pg, "sansb10", 354, 612, "AMERICAS \u00b7 AFRICA \u00b7 MIDDLE EAST",
             RED)
@@ -817,61 +746,61 @@ def render_page(pg, tp):
     pg.vline(348, 612, 1000, GREY, 1)
     pg.vline(672, 612, 1000, GREY, 1)
 
-    # ---- world map
-    pg.rect(MAP_X, MAP_Y, MAP_W, MAP_H, OCEAN)
-    grid_c = (198, 216, 222)
+    # World map: ocean, graticule, continents, numbered dots.
+    pg.fill(MAP_X, MAP_Y, MAP_W, MAP_H, OCEAN)
+    grid = (198, 216, 222)
     for lon in range(-150, 181, 30):
         gx, _ = project(lon, 0)
-        pg.vline(gx, MAP_Y, MAP_Y + MAP_H, grid_c, 1)
+        pg.vline(gx, MAP_Y, MAP_Y + MAP_H, grid, 1)
     for lat in (60, 30, 0, -30):
         _, gy = project(0, lat)
-        pg.hline(MAP_X, MAP_X + MAP_W, gy, grid_c, 1)
-    for poly_lonlat in CONTINENTS:
-        pg.poly([project(lon, lat) for lon, lat in poly_lonlat], LAND)
-    draw_frame(pg, MAP_X, MAP_Y, MAP_W, MAP_H, INK)
+        pg.hline(MAP_X, MAP_X + MAP_W, gy, grid, 1)
+    for outline in CONTINENTS:
+        pg.poly([project(lon, lat) for lon, lat in outline], LAND)
+    pg.frame(MAP_X, MAP_Y, MAP_W, MAP_H, INK)
     for dot in MAP_DOTS:
         sx, sy = project(dot["lon"], dot["lat"])
-        dotx, doty = sx + dot["dx"], sy + dot["dy"]
+        dx, dy = sx + dot["dx"], sy + dot["dy"]
         if dot["dx"] or dot["dy"]:
-            pg.line(sx, sy, dotx, doty, INK)
-            pg.circle(sx, sy, 2, RED)
-        pg.circle(dotx, doty, 7, RED)
+            pg.seg(sx, sy, dx, dy, INK)
+            pg.disc(sx, sy, 2, RED)
+        pg.disc(dx, dy, 7, RED)
         tag = str(dot["n"])
-        tp.draw(pg, "sansb10", dotx - tp.width("sansb10", tag) // 2,
-                doty - 6, tag, WHITE)
+        tp.draw(pg, "sansb10", dx - tp.width("sansb10", tag) // 2,
+                dy - 6, tag, WHITE)
     for j, txt in enumerate(MAP_LEGEND.split("\n")):
         tp.draw(pg, "sans10", 12, 798 + j * 12, txt, INK)
 
-    # ---- date check box
-    draw_frame(pg, 12, 850, 330, 150, INK)
+    # Date check: what did and did not happen by today.
+    pg.frame(12, 850, 330, 150, INK)
     tp.draw(pg, "sansb10", 20, 856, "DATE CHECK \u2014 LEFT OUT AS OLDER NEWS",
             RED)
     for j, item in enumerate(DATECHECK):
         tp.draw(pg, "sans10", 20, 872 + j * 12, item["text"], INK)
 
-    # ---- list columns
+    # The two story lists.
     for colx, items in ((354, LIST_A), (676, LIST_B)):
         for j, item in enumerate(items):
             y = 634 + j * 17
-            pg.rect(colx, y + 4, 9, 3, RED)
-            pg.rect(colx, y + 7, 9, 3, NAVY)
+            pg.fill(colx, y + 4, 9, 3, RED)
+            pg.fill(colx, y + 7, 9, 3, NAVY)
             after = tp.draw(pg, "sans12", colx + 13, y, item["text"], INK)
             tp.draw(pg, "sans12", after, y, " [" + item["source"] + "]", GREY)
 
-    # ---- footer
+    # Footer.
     pg.hline(12, 1012, 1006, GREY, 1)
     tp.draw(pg, "sans10", (W - tp.width("sans10", FOOTER)) // 2, 1010,
             FOOTER, GREY)
     return total
 
 
-# ---------------------------------------------------------------- main
+# ------------------------------------------------------------------ main
 def render_entry():
     fonts = _decode_fonts()
-    pg = Surface(W, H, PAPER)
+    pg = Canvas(PAPER)
     tp = Typer(fonts)
     total = render_page(pg, tp)
-    return encode_png_bytes(pg), total
+    return encode_png(pg), total
 
 
 def main(argv=None):
