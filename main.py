@@ -556,12 +556,16 @@ LIST_B = [
 ]
 
 TIMELINE = [
-    {"time": "00:00", "event": "Sudan drones hit Khartoum"},
+    # All six events are Monday 23 Nov 2026, UTC — verified against the
+    # research file + wire timestamps (see news-research-2026-11-23.md).
+    # Earlier version wrongly placed Sat/Sun events here (Sudan 22 Nov,
+    # UN robot talks 21 Nov, Cikande 21 Nov, Liverpool 22 Nov).
+    {"time": "00:00", "event": "Trump hosts meme-coin gala"},
     {"time": "01:00", "event": "Asian markets plunge"},
+    {"time": "01:22", "event": "China injects 499.5bn yuan"},
+    {"time": "01:30", "event": "Samsung Securities hacked"},
     {"time": "02:00", "event": "Gold rebounds past $3,600"},
-    {"time": "03:30", "event": "UN robot talks end"},
-    {"time": "10:00", "event": "Cikande fire: dozens missing"},
-    {"time": "16:30", "event": "Liverpool 4-0 Man Utd"},
+    {"time": "05:30", "event": "Nepal PM meets Modi in Delhi"},
 ]
 
 DATECHECK = [
@@ -575,6 +579,7 @@ DATECHECK = [
     {"text": "FIDE Game 1 NOT played \u2014 starts Tue 24 Nov"},
     {"text": "India-NZ Test NOT finished \u2014 NZ 157/4, Day 5"},
     {"text": "Not yet: NATO Poland decision, due Mon 23 Nov."},
+    {"text": "Timeline above: all six events Mon 23 Nov UTC"},
 ]
 
 FOOTER = "Stories leading Monday 23 November 2026, as reported that morning; claims are attributed. Sources: Reuters, AP, AFP, BBC, IANS, UN and others."
@@ -796,7 +801,7 @@ def _datecheck(pg, tp):
     tp.draw(pg, "sansb10", 20, 856, "DATE CHECK \u2014 LEFT OUT AS OLDER NEWS",
             RED)
     for j, item in enumerate(DATECHECK):
-        tp.draw(pg, "sans10", 20, 872 + j * 12, item["text"], INK)
+        tp.draw(pg, "sans10", 20, 872 + j * 11, item["text"], INK)
 
 
 def _story_lists(pg, tp):
